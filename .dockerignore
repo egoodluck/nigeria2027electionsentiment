@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+election_sentiment.db
+*.sqlite3
+*.log
