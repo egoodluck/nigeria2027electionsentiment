@@ -1,5 +1,6 @@
-google-api-python-client>=2.100.0
-textblob>=0.17.1
-streamlit>=1.38.0
-plotly>=5.24.0
-pandas>=2.0.0
+# Dashboard runtime (Streamlit Community Cloud installs this file).
+# Keep it light: the app only reads pre-computed tables from SQLite.
+streamlit>=1.50,<2
+plotly>=6.0
+pandas>=2.2
+numpy>=1.26

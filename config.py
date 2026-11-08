@@ -13,11 +13,22 @@ import os
 # Get a free key at https://console.cloud.google.com/apis/credentials
 # after enabling "YouTube Data API v3" on a project. See README.md.
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
-if not YOUTUBE_API_KEY:
-    raise EnvironmentError(
-        "Set the YOUTUBE_API_KEY environment variable before running. "
-        "See README.md for how to get a free key from Google Cloud Console."
-    )
+
+
+def require_api_key():
+    """Return the YouTube API key or raise a clear error.
+
+    The check is a function (not an import-time raise) so that modules which
+    only need CANDIDATES / CHANNELS -- the dashboard, the offline enrichment
+    steps -- can import config.py without a key. Collectors call this first.
+    """
+    key = os.environ.get("YOUTUBE_API_KEY")
+    if not key:
+        raise EnvironmentError(
+            "Set the YOUTUBE_API_KEY environment variable before running collection. "
+            "See README.md for how to get a free key from Google Cloud Console."
+        )
+    return key
 
 # --- Collection window ---
 # Election day: 16 January 2027 (INEC revised timetable, issued Feb 2026).
@@ -113,20 +124,27 @@ CHANNELS = [
 ]
 
 # --- Candidates: top 3, per current research scope ---
+# Aliases are matched as whole words (word-boundary, case-insensitive) by
+# attribute_and_score.py. The original substring matching made "bat" hit
+# "Abati", "debate" and "combat" -- 23% of Tinubu attributions were false
+# positives -- and the absence of a bare "obi" alias missed ~45% of genuine
+# Peter Obi mentions. Both were fixed in the 2026-11 enrichment release.
 CANDIDATES = {
     "tinubu": {
         "full_name": "Bola Tinubu",
-        "aliases": ["tinubu", "bola tinubu", "bola ahmed tinubu", "bat", "asiwaju", "jagaban", "president tinubu"],
+        "aliases": ["tinubu", "bola tinubu", "bola ahmed tinubu", "bat", "pbat", "asiwaju", "jagaban",
+                    "president tinubu", "bola", "emilokan", "t-pain", "tinubu's", "tinubus"],
         "party": "apc",
     },
     "atiku": {
         "full_name": "Atiku Abubakar",
-        "aliases": ["atiku", "atiku abubakar", "waziri adamawa"],
+        "aliases": ["atiku", "atiku abubakar", "waziri adamawa", "atikulated", "atiku's", "atikus", "waziri"],
         "party": "adc",
     },
     "obi": {
         "full_name": "Peter Obi",
-        "aliases": ["peter obi", "okwute", "obidient", "obidients"],
+        "aliases": ["peter obi", "obi", "okwute", "obidient", "obidients", "obi's", "obis", "mr obi",
+                    "peter obi's", "po"],
         "party": "ndc",
     },
 }
@@ -186,4 +204,20 @@ COMMENT_COLLECTION_START = "2026-07-01T00:00:00Z"
 # see README.md for the full explanation and the day-count math.
 MAX_RESULTS_PER_SEARCH = 25
 MAX_COMMENTS_PER_VIDEO = 300
-MAX_SEARCH_CALLS_PER_RUN = 70  # 7,000 units/run, leaving 3,000 units/day for comment pulls
+MAX_SEARCH_CALLS_PER_RUN = 50  # 5,000 units/run, leaving ~5,000 units/day for comment pulls
+
+# --- Discovery mode ---
+# "search"  : the original search.list approach (100 units per channel x query).
+# "uploads" : walk each channel's uploads playlist with playlistItems.list
+#             (1 unit per 50 videos) and keep videos whose TITLE matches
+#             DISCOVERY_TITLE_TERMS. ~100 units for the whole roster, so every
+#             channel is covered every day instead of once per 3-4 runs.
+#             Trade-off: search.list also matches descriptions/tags; the title
+#             filter relies on news channels naming candidates in titles,
+#             which they do consistently. Switch with DISCOVERY_MODE=uploads.
+DISCOVERY_MODE = os.environ.get("DISCOVERY_MODE", "search")
+DISCOVERY_TITLE_TERMS = [
+    "tinubu", "atiku", "peter obi", "obi", "apc", "adc", "ndc", "2027", "election", "inec",
+    "presidential", "president", "candidate", "coalition", "campaign", "jagaban", "asiwaju",
+]
+UPLOADS_MAX_PAGES_PER_CHANNEL = 4   # 4 x 50 = 200 most recent uploads per channel per run

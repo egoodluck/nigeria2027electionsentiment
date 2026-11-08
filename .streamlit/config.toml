@@ -1,0 +1,96 @@
+# Nigeria 2027 Election Intelligence Platform -- Streamlit theme.
+#
+# Both colour schemes are declared explicitly (Streamlit >= 1.46 [theme.light]
+# / [theme.dark]), so dark mode is a designed palette, not an automatic flip.
+# Brand: Deep Nigeria Green (#008753) on neutral slate. Candidate series
+# colours are set in app/theme.py and validated for colour-vision deficiency.
+
+[server]
+headless = true
+runOnSave = false
+maxUploadSize = 5
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = "stacktrace"
+
+[theme]
+base = "light"
+font = "Inter, system-ui, -apple-system, 'Segoe UI', sans-serif"
+headingFont = "Inter, system-ui, -apple-system, 'Segoe UI', sans-serif"
+codeFont = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+baseFontSize = 15
+baseRadius = "6px"
+buttonRadius = "6px"
+headingFontSizes = ["1.9rem", "1.45rem", "1.2rem", "1.05rem", "0.95rem", "0.85rem"]
+headingFontWeights = [700, 650, 600, 600, 600, 600]
+showWidgetBorder = true
+showSidebarBorder = true
+metricValueFontSize = "1.75rem"
+metricValueFontWeight = 650
+
+[theme.light]
+primaryColor = "#008753"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F5F4"
+textColor = "#182019"
+linkColor = "#006B42"
+borderColor = "#E1E5E2"
+dataframeBorderColor = "#E1E5E2"
+dataframeHeaderBackgroundColor = "#F3F5F4"
+codeBackgroundColor = "#F3F5F4"
+chartCategoricalColors = ["#EB6834", "#6250D6", "#1BAF7A", "#2A78D6", "#EDA100", "#E87BA4", "#008300", "#E34948"]
+chartDivergingColors = ["#E34948", "#F0EFEC", "#2A78D6"]
+chartSequentialColors = ["#E6F3EC", "#B9DFCB", "#8CCBAA", "#5DB688", "#2F9F68", "#008753", "#006B42", "#004F31", "#00351F", "#001F12"]
+greenColor = "#008753"
+greenTextColor = "#00502F"
+greenBackgroundColor = "#E6F3EC"
+orangeColor = "#EDA100"
+orangeTextColor = "#7A4F00"
+orangeBackgroundColor = "#FFF4DB"
+redColor = "#D03B3B"
+redTextColor = "#8A1C1C"
+redBackgroundColor = "#FBE7E7"
+grayColor = "#6B736E"
+grayTextColor = "#3F4642"
+grayBackgroundColor = "#EEF1EF"
+
+[theme.light.sidebar]
+backgroundColor = "#F3F5F4"
+secondaryBackgroundColor = "#FFFFFF"
+borderColor = "#E1E5E2"
+
+[theme.dark]
+primaryColor = "#2DB37A"
+backgroundColor = "#0F1412"
+secondaryBackgroundColor = "#161D19"
+textColor = "#E8ECEA"
+linkColor = "#5ECC9A"
+borderColor = "#283029"
+dataframeBorderColor = "#283029"
+dataframeHeaderBackgroundColor = "#161D19"
+codeBackgroundColor = "#161D19"
+chartCategoricalColors = ["#D95926", "#9085E9", "#199E70", "#3987E5", "#C98500", "#D55181", "#008300", "#E66767"]
+chartDivergingColors = ["#E66767", "#383835", "#3987E5"]
+chartSequentialColors = ["#0F2A1E", "#0E3F2A", "#0D5436", "#0C6A42", "#13804F", "#2DB37A", "#52C390", "#7AD2A8", "#A6E1C3", "#D3F0E1"]
+greenColor = "#2DB37A"
+greenTextColor = "#9BE3C1"
+greenBackgroundColor = "#113524"
+orangeColor = "#FAB219"
+orangeTextColor = "#FFD98A"
+orangeBackgroundColor = "#3A2A05"
+redColor = "#E66767"
+redTextColor = "#F5B5B5"
+redBackgroundColor = "#3C1717"
+grayColor = "#8E968F"
+grayTextColor = "#C3C9C5"
+grayBackgroundColor = "#1E2622"
+
+[theme.dark.sidebar]
+backgroundColor = "#161D19"
+secondaryBackgroundColor = "#0F1412"
+borderColor = "#283029"

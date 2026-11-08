@@ -1,268 +1,170 @@
-# Nigeria 2027 Election — YouTube Sentiment Collection Pipeline
+# Nigeria 2027 Election Intelligence Platform
 
-Collects YouTube comments mentioning Tinubu (APC), Atiku (ADC), and Peter Obi
-(NDC) from a fixed roster of 50 channels spanning major broadcast networks,
-investigative/digital outlets, print-backed digital channels, radio/talk
-shows, vernacular & regional-language broadcasts, and civil-society/advocacy
-channels. Each comment is tagged by candidate/party and each channel by
-outlet category, and comments are scored for sentiment — built for the six
-months leading up to Nigeria's January 16, 2027 presidential election.
+Public-comment intelligence for Nigeria's 16 January 2027 presidential election, built from YouTube
+comments on 50 Nigerian news, radio, vernacular-language and civic channels. Tracks the three leading
+contenders — Atiku Abubakar (ADC), Peter Obi (NDC) and Bola Ahmed Tinubu (APC) — with transformer
+sentiment, issue tagging, composite momentum/influence indices, authenticity signals, conversation
+geography and 30-day projections, all on a free, open-source stack.
 
-## Before you run anything
+Live app: https://nigeria2027electionsentimentanalysis.streamlit.app/
 
-**1. Verify the channel handles.** Several entries in `config.CHANNELS` are
-marked `# VERIFY` — I identified these channels by name during research but
-could not always confirm the exact `@handle` YouTube currently uses. Visit
-`youtube.com/<handle>` for each marked channel and correct it in `config.py`
-if it doesn't resolve to the right page. `resolve_channels.py` will raise a
-clear error (not fail silently) on any handle it can't find, so a wrong
-handle stops the pipeline immediately rather than quietly missing a channel.
+> **What it is / isn't.** It measures the conversation under the news on YouTube. It is not a poll, not a
+> forecast of the result, and every number inherits the limitations listed on the Methodology page.
 
-**2. Get a free YouTube Data API v3 key:**
-1. Go to [console.cloud.google.com](https://console.cloud.google.com/)
-2. Create a project (or use an existing one)
-3. Enable "YouTube Data API v3" under APIs & Services
-4. Create credentials → API key
-5. Copy `.env.example` to `.env`, or just export it: `export YOUTUBE_API_KEY=your_key_here`
+## Architecture
 
-Default free quota is 10,000 units/day — see the quota math below. With 50
-channels, a full discovery pass is rationed across multiple daily runs to
-stay inside that quota rather than completing in one run.
+![Architecture](docs/architecture.png)
 
-**3. Install dependencies:**
-```bash
-pip install -r requirements.txt
-```
+Three independent layers share one SQLite file:
 
-## Running it
+| Layer | Entry point | Runs where | Needs |
+|---|---|---|---|
+| **Collection** | `python run_pipeline.py` | daily, on the collection host | `YOUTUBE_API_KEY` |
+| **Enrichment** | `python -m pipeline.enrich` (also called by `run_pipeline.py`) | same host, after collection, CPU-only | PyTorch CPU + transformers (`requirements-pipeline.txt`) |
+| **Dashboard** | `streamlit run dashboard.py` | Streamlit Community Cloud (or anywhere) | `requirements.txt` only — it never runs a model |
+
+The dashboard reads pre-aggregated **fact tables** (`fact_daily`, `fact_daily_topic`, `fact_daily_location`,
+`keyword_stats`, `forecasts`, …) and only touches comment rows in the explorer, through parameterised SQL with
+`LIMIT`. That design is what keeps every page under a second and lets the same app serve 1M+ comments on a
+free tier. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+## Quick start
 
 ```bash
-python resolve_channels.py   # once, and again any time CHANNELS changes
-python run_pipeline.py       # first collection run
+# 1. Environment (Python 3.11–3.13 recommended for PyTorch wheels)
+python -m venv venv && source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements-pipeline.txt
+
+# 2. Collection (free YouTube Data API v3 key — see "API key" below)
+export YOUTUBE_API_KEY=...                                 # Windows: set YOUTUBE_API_KEY=...
+python resolve_channels.py                                # once, and whenever config.CHANNELS changes
+python run_pipeline.py                                    # discovery → comments → attribution → enrichment
+
+# 3. Dashboard
+streamlit run dashboard.py
 ```
 
-For daily incremental collection over the six-month window, schedule
-`run_pipeline.py` via cron (adjust paths):
+Upgrading an existing database created by the original pipeline? Run `python -m pipeline.enrich` once
+(≈1 h for 40k comments on two CPU cores; minutes per day afterwards). It adds tables, never alters or
+drops the original ones, detects the legacy attribution and re-attributes automatically.
+
+### Daily schedule
 
 ```cron
 30 23 * * * cd /path/to/nigeria_election_sentiment && /path/to/venv/bin/python run_pipeline.py >> pipeline.log 2>&1
 ```
 
-If you are migrating the pipeline to a cloud VM or container, make sure the
-host is always on and use the same cron schedule (`23:30` local server time)
-so the daily run happens at 11:30 PM.
+`run_daily_pipeline.sh` / `.bat` wrap the same command and load `.env`. Add `--no-enrich` to collect only.
 
-With 50 channels, one run is no longer enough to search every channel x
-query pair in a day's quota (see "Quota math" below) — `collect_videos.py`
-rations search calls across runs automatically via the `discovery_state`
-table, picking up up where the previous run left off. You don't need to do
-anything differently; just keep running `run_pipeline.py` daily and it
-converges.
+### Deploying the dashboard
 
-## Azure migration guidance
+Streamlit Community Cloud installs `requirements.txt` and runs `dashboard.py`. The database is committed to
+the repository as a snapshot (`election_sentiment.db`) so the hosted app has data; after each pipeline run,
+commit the refreshed file and push — the app reloads automatically. Keep the hosting repository private if
+you consider the raw comments sensitive. `.streamlit/config.toml` carries the light and dark themes.
 
-The best Azure option for this pipeline is a small Linux VM, because the
-pipeline uses a local SQLite database (`election_sentiment.db`) and needs a
-persistent host to keep state between runs.
-
-### Why Azure VM is the best fit
-
-- SQLite is easiest to keep on a VM disk.
-- The app is lightweight and only runs once per day.
-- A Linux VM lets you keep the database file persisted without extra
-  storage plumbing.
-- You can use the included `azure-setup.sh` to configure the VM and install
-  a daily cron job at 23:30.
-
-### What to do on Azure
-
-1. Create a small Linux VM in Azure.
-   - A B1s/B1ms or similar low-cost Ubuntu VM is usually enough.
-   - Choose a region that is supported by Azure free-tier VMs if you want to
-     minimize cost.
-2. Clone this repository on the VM.
-3. Copy `.env.example` to `.env` and set `YOUTUBE_API_KEY`.
-4. Run:
-   ```bash
-   chmod +x azure-setup.sh run_daily_pipeline.sh
-   ./azure-setup.sh
-   ```
-   The setup script now creates `.env` from `.env.example` if needed and
-   reminds you to replace the placeholder `YOUTUBE_API_KEY` before the first
-   run.
-5. Confirm the cron job is installed by running:
-   ```bash
-   crontab -l
-   ```
-
-If you want to persist the SQLite database on a mounted Azure disk or volume,
-set `DB_PATH` in the VM environment or in `.env` to point to that mounted
-location, for example `/mnt/azure-data/election_sentiment.db`.
-
-### Azure CLI provisioning commands
-
-If you want to provision the VM from your own machine with Azure CLI, run:
+GitHub rejects files above 100 MB. The enriched database is ~70 MB at 40k comments and grows roughly 1.7 MB per
+1,000 comments. When it approaches the limit, publish a slim copy for hosting and point the app at it:
 
 ```bash
-az login
-az account set --subscription "<YOUR_SUBSCRIPTION_NAME_OR_ID>"
-
-az group create \
-  --name NigeriaElectionSentimentRG \
-  --location southafricanorth
-
-az vm create \
-  --resource-group NigeriaElectionSentimentRG \
-  --name NigeriaElectionSentimentVM \
-  --image UbuntuLTS \
-  --size Standard_B1s \
-  --admin-username azureuser \
-  --generate-ssh-keys
-
-az vm open-port \
-  --resource-group NigeriaElectionSentimentRG \
-  --name NigeriaElectionSentimentVM \
-  --port 22
+python -m pipeline.publish --models routed textblob     # -> election_sentiment.app.db (~47 MB today)
+# commit election_sentiment.app.db and set DB_PATH=election_sentiment.app.db in the Streamlit Cloud secrets/env
 ```
 
-Then connect to the VM with:
+### API key
+
+1. console.cloud.google.com → create a project → enable *YouTube Data API v3* → Credentials → API key.
+2. `cp .env.example .env` and set `YOUTUBE_API_KEY`, or export it in the environment.
+3. Free quota is 10,000 units/day. `search.list` costs 100 units, `commentThreads.list` and `videos.list` 1 unit.
+
+## Repository layout
+
+```
+dashboard.py                 Streamlit entry point (st.navigation)
+app/
+  theme.py                   design tokens, CSS, Plotly template (light + dark)
+  data.py                    cached read-only loaders, explorer SQL
+  analytics.py               net sentiment + CI, momentum/influence indices, narrative brief
+  charts.py                  Plotly builders (dataviz rules: one axis, fixed colours, masked small cells)
+  components.py              page header, stat tiles, scorecards, badges, table twins
+  state.py                   global sidebar controls → Filters
+  pages/                     overview · sentiment · momentum · topics · media · geography ·
+                             authenticity · projections · explorer · methodology
+  assets/nigeria_states.geojson  geoBoundaries ADM1, CC BY 4.0, simplified
+pipeline/
+  settings.py                constants shared by pipeline and app (no API key)
+  schema.py                  additive DDL + indexes
+  features.py                language hint, duplicate hashes, author bursts, risk score
+  sentiment_models.py        CardiffNLP RoBERTa + NaijaSenti AfriBERTa → routed ensemble
+  topics.py                  13-issue lexicon (multi-label) + TF-IDF/NMF discovery
+  locations.py               36 states + FCT, 6 geopolitical zones
+  video_stats.py             views/likes per video (reach)
+  aggregates.py              fact tables, weighted log-odds keywords, model agreement
+  forecast.py                ETS/ARIMA projections with intervals
+  enrich.py                  orchestrator
+config.py, db.py, collect_videos.py, collect_comments.py, attribute_and_score.py, resolve_channels.py,
+run_pipeline.py              collection layer (original scripts, upgraded)
+pipeline/publish.py          slim copy of the database for hosting (drops raw text, optional per-model rows)
+docs/                        ARCHITECTURE.md · IMPROVEMENT_REPORT.md · ROADMAP.md · architecture.png/svg
+tests/                       pytest unit tests for analytics, attribution, features, topics, locations
+tools/                       headless page tests, interaction tests, performance timing, screenshots
+```
+
+## Configuration highlights (`config.py`, `pipeline/settings.py`)
+
+* `DISCOVERY_MODE` — `search` (default; original behaviour, 100 units per channel × query) or `uploads`
+  (walk each channel's uploads playlist, ~100 units for the whole roster, every day). Switch via environment
+  variable once validated against a live key.
+* `MAX_SEARCH_CALLS_PER_RUN` — 50 (5,000 units), leaving ~5,000 units for comments and statistics.
+* `MAX_COMMENTS_PER_VIDEO` — per-video cap per run; the collector stops paging when it reaches comments it already holds.
+* `DEFAULT_MODEL` — `routed` (CardiffNLP for English, NaijaSenti for Pidgin/Hausa/Yoruba/Igbo).
+* `TOPICS`, `STATE_ALIASES`, `LANG_MARKERS` — auditable lexicons; every tag in the app can be traced to a term here.
+* `MATURITY_DAYS` — days after the last fetch treated as "still accumulating" (excluded from trends/indices/projections).
+* `MIN_N_FOR_RATE` — cells with fewer observations are masked.
+
+## Data model (additions)
+
+| Table | Grain | Purpose |
+|---|---|---|
+| `comment_sentiment` | comment × model | label, confidence, class probabilities; models `cardiffnlp`, `naijasenti`, `routed`, `textblob` |
+| `comment_features` | comment | language hint, text hash, duplicate counts, author activity, risk score, flag |
+| `comment_topics` | comment × topic × method | lexicon (multi-label) and NMF dominant theme |
+| `discovered_themes` | theme × rank | top terms per NMF theme |
+| `comment_locations` | comment × state | states / zones the comment mentions |
+| `video_stats` | video | views, likes, comment count, duration |
+| `fact_daily` | day × candidate × channel × model | counts by label, likes, authors, flagged, videos |
+| `fact_daily_topic`, `fact_daily_location` | day × candidate × topic/state × model | counts by label |
+| `keyword_stats` | candidate × polarity × model × rank | weighted log-odds terms (positive, negative, emerging) |
+| `forecasts` | candidate × model × metric × day | 30-day projections with 80/95% intervals |
+| `model_agreement` | model pair | agreement rate and Cohen's κ |
+| `enrichment_runs` | run | step, rows written, parameters |
+
+Indexes on `comments(video_id, published_at, author)`, `videos(channel_id)` and the enrichment tables were
+added; the original schema had none beyond primary keys.
+
+## Testing
 
 ```bash
-ssh azureuser@$(az vm show --resource-group NigeriaElectionSentimentRG --name NigeriaElectionSentimentVM --show-details --query publicIps -o tsv)
+pip install -r requirements-dev.txt
+pytest -q                     # analytics, attribution, features, topics, locations
 ```
 
-On the VM, clone this repo or copy the files, then run the setup script:
+Each page also runs headlessly with Streamlit's `AppTest` (`python tools/apptest_pages.py`, and
+`python tools/apptest_interactions.py` for filter combinations); `python tools/perf.py` reports cold/warm render
+times; the visual QA used `tools/screenshot.py` with headless Chrome at desktop, tablet and phone widths in both
+colour schemes.
 
-```bash
-chmod +x azure-setup.sh run_daily_pipeline.sh
-./azure-setup.sh
-```
+## Methodology, limitations and roadmap
 
-If your repo is not on GitHub, upload the repo files to the VM using `scp`
-from your local machine or create a GitHub repo and clone it on the Azure VM.
+* In-app: the **Methodology & data** page (sources, attribution rules, models and their agreement, index
+  formulas, authenticity heuristics, projections, limitations, downloads, annotation-sample export).
+* [`docs/IMPROVEMENT_REPORT.md`](docs/IMPROVEMENT_REPORT.md) — what changed, why, expected impact.
+* [`docs/ROADMAP.md`](docs/ROADMAP.md) — prioritised next steps.
 
-### If you want to use containers instead
+## Licence and attribution
 
-A container-based deployment is also possible, but it requires an Azure
-persistent volume for `election_sentiment.db`.
-- Build the included `Dockerfile`.
-- Mount an Azure Files share or managed volume to persist `election_sentiment.db`.
-- Schedule the container to run daily at 23:30 using Azure Logic Apps, Azure
-  Container Instances with a scheduler, or another Azure scheduling service.
-
-### Important reminder
-
-A GitHub repo alone will not keep the app running daily. The Azure VM must be
-powered on and reachable. The included `azure-setup.sh` and `run_daily_pipeline.sh`
-make Azure VM deployment simple and reliable.
-
-## What it does, step by step
-
-1. **`resolve_channels.py`** — resolves the 50 configured channels (across
-   6 outlet categories — broadcast networks, investigative/digital,
-   print-backed digital, radio/talk shows, vernacular & regional
-   broadcasts, and civil-society/advocacy) to YouTube channel IDs and
-   stores them.
-2. **`collect_videos.py`** — for each channel, searches for 4 fixed queries
-   ("Tinubu APC", "Atiku ADC", "Peter Obi NDC", "Nigeria 2027 election"),
-   restricted to the collection window, and stores matching videos. With 50
-   channels this no longer fits in a single day's quota, so it's rationed
-   into multiple runs — see "Quota math" below.
-3. **`collect_comments.py`** — pulls up to `MAX_COMMENTS_PER_VIDEO` (default
-   300) top-level comments per stored video. By default it only stores comments
-   published on or after `config.COMMENT_COLLECTION_START`; use `python
-   collect_comments.py --since 2026-07-01T00:00:00Z` to override the start date.
-4. **`attribute_and_score.py`** — cleans each comment's text, tags it with
-   the candidate(s)/party(ies) it mentions, and scores sentiment.
-5. **`run_pipeline.py`** — runs all of the above in order and logs the run.
-
-Everything lands in `election_sentiment.db` (SQLite).
-
-## Quota math
-
-| Call | Cost |
-|---|---|
-| `search.list` | 100 units |
-| `commentThreads.list` | 1 unit |
-| `channels.list` | 1 unit |
-
-A full video-discovery **pass** (one search.list call per channel x query
-pair) = 50 channels × 4 queries = 200 calls = **20,000 units** — double the
-free daily quota (10,000 units/day). A single run can no longer complete a
-full pass, so `collect_videos.py` rations search calls via
-`config.MAX_SEARCH_CALLS_PER_RUN` (default 70 calls = 7,000 units/run,
-leaving ~3,000 units/day headroom for comment pulls) and persists its
-progress in the `discovery_state` table between runs. At the default
-rationing, one full pass takes **3 daily runs** (70 + 70 + 60 calls) to
-sweep every channel x query pair; only once a pass fully completes does its
-`publishedBefore` become the next pass's `publishedAfter`, so nothing is
-skipped or double-counted — a pass just takes a few days instead of
-finishing in one run.
-
-If that latency is a problem (e.g. you want same-day coverage), your
-options are:
-- Request a quota increase from Google Cloud Console (the "Get a free
-  YouTube Data API v3 key" section above links to the console), then raise
-  `MAX_SEARCH_CALLS_PER_RUN` to match — quota resets once per day regardless
-  of how many times you run the pipeline, so this is the only way to
-  actually finish a pass in fewer runs.
-- Reduce `DISCOVERY_QUERIES` or the channel roster in `config.py`.
-
-## Known limitations to carry into your methodology section
-
-- **Sentiment model.** `attribute_and_score.py` uses TextBlob as a baseline
-  — it's lexicon-based and not tuned for Nigerian English or Pidgin.
-  Validate it against a human-coded sample (see the docstring in
-  `score_sentiment()`) before treating scores as final, and report the
-  agreement statistic. Swapping in a stronger model later only requires
-  editing that one function.
-- **Outlet category, not geolocation or outlet quality.** `channels.category`
-  groups the roster by outlet type (broadcast network, investigative/
-  digital, print-backed digital, radio/talk show, vernacular & regional,
-  civil-society/advocacy) — it is a proxy for the kind of audience a
-  channel reaches, not a measured attribute of the audience itself. Within
-  that, the `vernacular_regional` category (BBC Hausa/Yoruba/Igbo, DW Hausa,
-  VOA Hausa, Arewa24) works as a soft regional-language proxy the way the
-  original 4-channel set did: commenting on a Hausa-language video suggests
-  engagement with Hausa-language news, not confirmed residence in the
-  North. The exception is **BBC News Africa**, standing in for BBC News
-  Pidgin (which has no dedicated YouTube channel as of this writing) —
-  it's pan-African and English-language, so it doesn't carry the same
-  regional-language signal as the rest of this category. State all of this
-  as a limitation, not a resolved design choice.
-- **Party acronym disambiguation.** ADC and NDC acronyms are only counted
-  as party mentions when they co-occur with "Nigeria" or a candidate name,
-  to filter out "Aide-de-Camp" (ADC) and Ghana's NDC. This will still miss
-  some genuine mentions and let through some false positives — worth a
-  manual spot-check on a sample before final analysis.
-- **Candidate list is not final.** PDP is currently split between two
-  factions (Jonathan vs. Onor); INEC's certified candidate list isn't out
-  yet. Re-check `config.CANDIDATES` against the final list before your
-  main collection window opens in earnest.
-
-## Getting from here to your correlation analysis
-
-Once you've been collecting for a while, a first-pass query for
-average sentiment per candidate per outlet category looks like this:
-
-```sql
-SELECT
-    ccm.candidate,
-    ch.category,
-    AVG(c.sentiment_polarity) AS avg_polarity,
-    COUNT(*) AS n_comments
-FROM comments c
-JOIN comment_candidate_mentions ccm ON ccm.comment_id = c.comment_id
-JOIN videos v ON v.video_id = c.video_id
-JOIN channels ch ON ch.channel_id = v.channel_id
-GROUP BY ccm.candidate, ch.category
-ORDER BY ccm.candidate, ch.category;
-```
-
-If you specifically want the regional-language proxy from the original
-4-channel design, filter to `WHERE ch.category = 'vernacular_regional'`
-and group by `ch.label` instead (each channel there maps to one
-language/region) — that's your input table for the Spearman correlation
-against internet-penetration-by-region discussed earlier, not built into
-this pipeline yet since it depends on which penetration dataset you pair
-it with.
+Code: MIT. Map boundaries: geoBoundaries (gbOpen) ADM1, CC BY 4.0. Models: CardiffNLP
+`twitter-roberta-base-sentiment-latest` (MIT) and `Davlan/naija-twitter-sentiment-afriberta-large`
+(NaijaSenti, CC BY 4.0 data / open weights). Comments are public YouTube data; only display names are stored
+and they are masked in the interface.

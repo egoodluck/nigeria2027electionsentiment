@@ -6,6 +6,11 @@ __pycache__/
 *.log
 venv/
 .venv/
+*.db-journal
+*.db-wal
+*.db-shm
+shots/
+.pytest_cache/
 
 # Personal Claude Code settings -- contains a live YOUTUBE_API_KEY in this
 # repo's permission allowlist history, never publish it.
@@ -13,3 +18,4 @@ venv/
 
 # election_sentiment.db is intentionally tracked (see README) -- committed as
 # a snapshot so the deployed dashboard has data. Keep the hosting repo private.
+*.bak.db

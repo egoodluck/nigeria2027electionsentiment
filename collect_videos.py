@@ -33,23 +33,31 @@ find yet, so no call, no quota spent, no error.
 
 import datetime
 from googleapiclient.discovery import build
+import re
+
+from googleapiclient.errors import HttpError
 from config import (
-    YOUTUBE_API_KEY,
+    require_api_key,
     DISCOVERY_QUERIES,
+    DISCOVERY_MODE,
+    DISCOVERY_TITLE_TERMS,
     COLLECTION_START,
     COLLECTION_END,
     MAX_RESULTS_PER_SEARCH,
     MAX_SEARCH_CALLS_PER_RUN,
+    UPLOADS_MAX_PAGES_PER_CHANNEL,
 )
 from db import get_conn, upsert_video, get_discovery_state, save_discovery_state
+
+TITLE_RX = re.compile(r"(?<![\w])(" + "|".join(re.escape(t) for t in DISCOVERY_TITLE_TERMS) + r")(?![\w])", re.IGNORECASE)
 
 
 def _utcnow_rfc3339():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def collect_videos():
-    youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+def collect_videos_search():
+    youtube = build("youtube", "v3", developerKey=require_api_key())
     quota_used = 0
     videos_found = 0
 
@@ -138,6 +146,66 @@ def collect_videos():
 
     print(f"\nVideo discovery done this run. {videos_found} new videos stored. Quota used: {quota_used} units.")
     return videos_found, quota_used
+
+
+def collect_videos_uploads():
+    """Cheap discovery: scan each channel's uploads playlist (1 unit / 50 videos)
+    and keep videos inside the collection window whose title matches
+    DISCOVERY_TITLE_TERMS. Stops paging a channel once it reaches videos older
+    than the window start or older than the newest video already stored for it."""
+    youtube = build("youtube", "v3", developerKey=require_api_key())
+    quota_used = 0
+    videos_found = 0
+    with get_conn() as conn:
+        channel_rows = conn.execute("SELECT channel_id, handle, label FROM channels ORDER BY label").fetchall()
+        if not channel_rows:
+            raise RuntimeError("No channels in the database. Run resolve_channels.py first.")
+        for ch in channel_rows:
+            uploads_id = "UU" + ch["channel_id"][2:] if ch["channel_id"].startswith("UC") else None
+            if not uploads_id:
+                print(f"[{ch['label']}] channel id does not look like UC...; skipping uploads scan")
+                continue
+            newest_known = conn.execute(
+                "SELECT MAX(published_at) FROM videos WHERE channel_id = ?", (ch["channel_id"],)).fetchone()[0]
+            floor = max(COLLECTION_START, newest_known or COLLECTION_START)
+            page_token, pages, kept = None, 0, 0
+            while pages < UPLOADS_MAX_PAGES_PER_CHANNEL:
+                try:
+                    resp = youtube.playlistItems().list(
+                        part="snippet", playlistId=uploads_id, maxResults=50, pageToken=page_token).execute()
+                    quota_used += 1
+                    pages += 1
+                except HttpError as e:
+                    print(f"[{ch['label']}] playlist error: {e}")
+                    break
+                reached_floor = False
+                for item in resp.get("items", []):
+                    sn = item["snippet"]
+                    published = sn.get("publishedAt", "")
+                    if published < floor:
+                        reached_floor = True
+                        break
+                    if published >= COLLECTION_END:
+                        continue
+                    title = sn.get("title", "")
+                    if TITLE_RX.search(title):
+                        vid = sn.get("resourceId", {}).get("videoId")
+                        if vid:
+                            upsert_video(conn, vid, ch["channel_id"], title, published, "uploads")
+                            videos_found += 1
+                            kept += 1
+                page_token = resp.get("nextPageToken")
+                if reached_floor or not page_token:
+                    break
+            print(f"[{ch['label']}] uploads scan: {pages} page(s), {kept} matching videos (quota so far {quota_used})")
+    print(f"\nVideo discovery (uploads mode) done. {videos_found} videos stored/refreshed. Quota used: {quota_used} units.")
+    return videos_found, quota_used
+
+
+def collect_videos():
+    if DISCOVERY_MODE == "uploads":
+        return collect_videos_uploads()
+    return collect_videos_search()
 
 
 if __name__ == "__main__":

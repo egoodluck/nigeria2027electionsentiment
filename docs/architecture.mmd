@@ -1,0 +1,53 @@
+%%{init: {"theme": "base", "flowchart": {"nodeSpacing": 28, "rankSpacing": 46, "curve": "basis"}, "themeVariables": {"fontFamily": "Helvetica, Arial, sans-serif", "primaryColor": "#E6F3EC", "primaryBorderColor": "#008753", "primaryTextColor": "#182019", "lineColor": "#6B736E", "secondaryColor": "#F3F5F4", "tertiaryColor": "#FFF4DB", "clusterBkg": "#F7F8F7", "clusterBorder": "#CFD5D1", "fontSize": "13px"}}}%%
+flowchart TB
+    subgraph SRC["YouTube Data API v3 — free quota, 10,000 units/day"]
+        direction LR
+        Y1["search.list / playlistItems.list<br/><i>video discovery</i>"]
+        Y2["commentThreads.list<br/><i>top-level comments</i>"]
+        Y3["videos.list<br/><i>views · likes · duration</i>"]
+    end
+
+    subgraph COL["Collection · run_pipeline.py · daily · needs API key"]
+        direction LR
+        C1["collect_videos.py<br/>rationed search passes<br/>or uploads-playlist scan"]
+        C2["collect_comments.py<br/>newest-first · stops at known ids<br/>quota-aware"]
+        C3["attribute_and_score.py<br/>HTML clean · whole-word aliases<br/>party disambiguation · TextBlob baseline"]
+        C4["pipeline/video_stats.py<br/>reach statistics"]
+        C1 --> C2 --> C3
+    end
+
+    DB[("SQLite · election_sentiment.db<br/>raw tables + enrichment tables + indexes<br/>committed as a snapshot for the hosted app")]
+
+    subgraph ENR["Enrichment · python -m pipeline.enrich · offline, CPU-only, no API key"]
+        direction LR
+        E1["features<br/>language hint · text hash<br/>author bursts · risk score"]
+        E2["sentiment_models<br/>CardiffNLP RoBERTa (en)<br/>NaijaSenti AfriBERTa (pcm/ha/yo/ig)<br/>→ routed ensemble"]
+        E3["topics<br/>13-issue lexicon · multi-label<br/>+ TF-IDF / NMF discovery"]
+        E4["locations<br/>36 states + FCT<br/>→ 6 geopolitical zones"]
+        E5["aggregates<br/>fact tables · keyword log-odds<br/>model agreement (κ)"]
+        E6["forecast<br/>ETS / ARIMA · 30 days<br/>80% & 95% intervals"]
+        E1 --> E2 --> E3 --> E4 --> E5 --> E6
+    end
+
+    subgraph APP["Dashboard · streamlit run dashboard.py · read-only · cached on DB mtime"]
+        direction LR
+        A0["app/data.py<br/>cached SQL loaders"]
+        A1["app/analytics.py<br/>net ± CI · momentum & influence<br/>narrative brief · topic deltas"]
+        A2["app/theme.py · app/charts.py<br/>design tokens · Plotly template<br/>CVD-validated palette · light/dark"]
+        A3["app/pages/*<br/>brief · sentiment · momentum · issues<br/>media · geography · authenticity<br/>projections · explorer · methodology"]
+        A0 --> A1 --> A2 --> A3
+    end
+
+    U["Streamlit Community Cloud<br/>observers · newsrooms · researchers"]
+
+    Y1 --> C1
+    Y2 --> C2
+    Y3 --> C4
+    C3 --> DB
+    C4 --> DB
+    DB <--> ENR
+    DB --> A0
+    A3 --> U
+
+    classDef store fill:#FFFFFF,stroke:#008753,stroke-width:2px,color:#182019;
+    class DB store;

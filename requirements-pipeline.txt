@@ -1,0 +1,14 @@
+# Collection + enrichment host (laptop, VM or container). Not needed by the dashboard.
+# Python 3.11-3.13 recommended (PyTorch CPU wheels). Install torch from the CPU index first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements-pipeline.txt
+-r requirements.txt
+google-api-python-client>=2.100.0
+textblob>=0.17.1
+transformers>=4.44
+torch>=2.3
+sentencepiece>=0.2
+protobuf>=4.25
+scikit-learn>=1.4
+statsmodels>=0.14
+scipy>=1.11

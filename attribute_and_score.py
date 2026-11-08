@@ -1,70 +1,97 @@
 """
 Post-processing pass over stored comments:
 
-  1. Clean text (strip URLs, normalize whitespace).
-  2. Attribute each comment to the candidate(s)/party(ies) it mentions,
-     applying the disambiguation rule for ADC/NDC (must co-occur with
-     "nigeria" or a candidate alias -- filters out "Aide-de-Camp" and
+  1. Clean text (unescape HTML entities, strip <br> tags and URLs, normalise
+     whitespace).
+  2. Attribute each comment to the candidate(s)/party(ies) it mentions.
+     Aliases are matched as WHOLE WORDS (word-boundary, case-insensitive).
+     The ADC/NDC disambiguation rule still applies (bare acronym must co-occur
+     with "nigeria" or a candidate alias -- filters out "Aide-de-Camp" and
      Ghana-NDC false positives).
-  3. Score sentiment.
+  3. Score sentiment with the TextBlob lexicon baseline.
 
-Only processes comments where text_clean IS NULL, so it's safe to re-run
-after every collect_comments.py pass -- already-processed comments are
-left untouched.
+TextBlob is kept only as the legacy baseline that the methodology page
+compares against. The sentiment the dashboard shows by default comes from
+the transformer models in pipeline/sentiment_models.py, which run after this
+step as part of pipeline/enrich.py.
+
+Incremental mode (default) only processes comments where text_clean IS NULL,
+so it is safe to re-run after every collect_comments.py pass.
+
+    python attribute_and_score.py                # incremental
+    python attribute_and_score.py --reattribute  # redo attribution for ALL comments
+
+--reattribute exists because the original release matched aliases as plain
+substrings: "bat" inside "Abati"/"debate" produced ~1,600 false Tinubu
+attributions and the missing bare "obi" alias dropped ~1,900 genuine Peter
+Obi mentions. Run it once after upgrading; pipeline/enrich.py does so
+automatically when it detects the legacy attribution.
 """
 
+import argparse
+import html
 import re
-from textblob import TextBlob
-from config import CANDIDATES, PARTIES, DISAMBIGUATORS
+
+from config import CANDIDATES, DISAMBIGUATORS, PARTIES
 from db import get_conn
 
 URL_RE = re.compile(r"http\S+|www\.\S+")
+TAG_RE = re.compile(r"<br\s*/?>|</?[a-z][^>]{0,40}>", re.IGNORECASE)
 WHITESPACE_RE = re.compile(r"\s+")
 
 
+def _word_rx(terms):
+    terms = sorted(set(terms), key=len, reverse=True)
+    return re.compile(r"(?<![\w])(" + "|".join(re.escape(t) for t in terms) + r")(?![\w])", re.IGNORECASE)
+
+
+CANDIDATE_RX = {key: _word_rx(info["aliases"]) for key, info in CANDIDATES.items()}
+DISAMBIGUATOR_RX = _word_rx(DISAMBIGUATORS)
+PARTY_FULL_RX = {key: _word_rx([info["full_name"]]) for key, info in PARTIES.items()}
+PARTY_ACRONYM_RX = {key: _word_rx([info["acronym"]]) for key, info in PARTIES.items()}
+
+
 def clean_text(raw):
-    text = URL_RE.sub("", raw or "")
+    text = html.unescape(raw or "")
+    text = TAG_RE.sub(" ", text)
+    text = URL_RE.sub("", text)
     text = WHITESPACE_RE.sub(" ", text).strip()
     return text
 
 
-def match_candidates(text_lower):
-    matches = []
-    for key, info in CANDIDATES.items():
-        if any(alias in text_lower for alias in info["aliases"]):
-            matches.append(key)
-    return matches
+def match_candidates(text):
+    """Return the list of candidate keys whose aliases appear as whole words."""
+    return [key for key, rx in CANDIDATE_RX.items() if rx.search(text)]
 
 
-def match_parties(text_lower, matched_candidates):
+def matched_aliases(text):
+    """{candidate: [aliases found]} -- used by the dashboard's explainability panel."""
+    out = {}
+    for key, rx in CANDIDATE_RX.items():
+        hits = sorted({m.lower() for m in rx.findall(text or "")})
+        if hits:
+            out[key] = hits
+    return out
+
+
+def match_parties(text, matched_candidates):
     matches = []
-    has_disambiguator = bool(matched_candidates) or any(d in text_lower for d in DISAMBIGUATORS)
+    has_disambiguator = bool(matched_candidates) or DISAMBIGUATOR_RX.search(text) is not None
     for key, info in PARTIES.items():
-        full_name_hit = info["full_name"].lower() in text_lower
-        acronym_hit = re.search(rf"\b{re.escape(info['acronym'])}\b", text_lower) is not None
-        if full_name_hit:
+        if PARTY_FULL_RX[key].search(text):
             matches.append(key)
-        elif acronym_hit and (not info["disambiguation_required"] or has_disambiguator):
+        elif PARTY_ACRONYM_RX[key].search(text) and (not info["disambiguation_required"] or has_disambiguator):
             matches.append(key)
     return matches
 
 
 def score_sentiment(text):
-    """
-    Baseline sentiment scorer (TextBlob, lexicon-based, English-only).
+    """TextBlob lexicon polarity, thresholded at +/-0.1. Legacy baseline only.
 
-    KNOWN LIMITATION: not trained on Nigerian English or Pidgin, so it will
-    misjudge a meaningful share of comments in this dataset. Before treating
-    scores as final:
-      1. Pull a random sample (e.g. 300-500 comments) and have it manually
-         coded (positive/negative/neutral) by 2+ human raters.
-      2. Compute agreement between TextBlob's labels and the human labels
-         (e.g. Cohen's kappa) and report it in your methodology section.
-      3. If agreement is weak, swap this function out for a stronger model
-         (e.g. a multilingual or Nigerian-English-tuned transformer from
-         Hugging Face) -- nothing else in the pipeline needs to change,
-         this function is the only place sentiment logic lives.
-    """
+    Imported lazily so the dashboard (which reuses the alias matcher above for
+    its explainability panel) does not need TextBlob installed."""
+    from textblob import TextBlob
+
     polarity = TextBlob(text).sentiment.polarity
     if polarity > 0.1:
         label = "positive"
@@ -75,40 +102,71 @@ def score_sentiment(text):
     return polarity, label
 
 
+def _write_mentions(conn, comment_id, candidates_matched, parties_matched):
+    for cand in candidates_matched:
+        conn.execute(
+            "INSERT OR IGNORE INTO comment_candidate_mentions (comment_id, candidate) VALUES (?, ?)",
+            (comment_id, cand),
+        )
+    for party in parties_matched:
+        conn.execute(
+            "INSERT OR IGNORE INTO comment_party_mentions (comment_id, party) VALUES (?, ?)",
+            (comment_id, party),
+        )
+
+
 def run():
+    """Incremental: clean, attribute and baseline-score comments not yet processed."""
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT comment_id, text_raw FROM comments WHERE text_clean IS NULL"
         ).fetchall()
-
         for row in rows:
             comment_id = row["comment_id"]
             clean = clean_text(row["text_raw"])
-            text_lower = clean.lower()
-
-            candidates_matched = match_candidates(text_lower)
-            parties_matched = match_parties(text_lower, candidates_matched)
+            candidates_matched = match_candidates(clean)
+            parties_matched = match_parties(clean, candidates_matched)
             polarity, label = score_sentiment(clean)
-
             conn.execute(
                 """UPDATE comments
                    SET text_clean = ?, sentiment_polarity = ?, sentiment_label = ?
                    WHERE comment_id = ?""",
                 (clean, polarity, label, comment_id),
             )
-            for cand in candidates_matched:
-                conn.execute(
-                    "INSERT OR IGNORE INTO comment_candidate_mentions (comment_id, candidate) VALUES (?, ?)",
-                    (comment_id, cand),
-                )
-            for party in parties_matched:
-                conn.execute(
-                    "INSERT OR IGNORE INTO comment_party_mentions (comment_id, party) VALUES (?, ?)",
-                    (comment_id, party),
-                )
+            _write_mentions(conn, comment_id, candidates_matched, parties_matched)
+        print(f"Processed {len(rows)} new comments (attribution + baseline sentiment).")
+        return len(rows)
 
-        print(f"Processed {len(rows)} new comments (attribution + sentiment).")
+
+def reattribute_all():
+    """Recompute candidate/party mentions for EVERY comment with the current
+    alias rules, and re-clean text (HTML entities, <br> tags). Sentiment
+    columns are left untouched."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT comment_id, text_raw, text_clean FROM comments").fetchall()
+        conn.execute("DELETE FROM comment_candidate_mentions")
+        conn.execute("DELETE FROM comment_party_mentions")
+        n_cand = 0
+        for row in rows:
+            clean = clean_text(row["text_raw"])
+            if clean != (row["text_clean"] or ""):
+                conn.execute("UPDATE comments SET text_clean = ? WHERE comment_id = ?", (clean, row["comment_id"]))
+            candidates_matched = match_candidates(clean)
+            parties_matched = match_parties(clean, candidates_matched)
+            n_cand += len(candidates_matched)
+            _write_mentions(conn, row["comment_id"], candidates_matched, parties_matched)
+        # Video titles carry HTML entities straight from the API; unescape them too.
+        for v in conn.execute("SELECT video_id, title FROM videos WHERE title LIKE '%&%;%'").fetchall():
+            conn.execute("UPDATE videos SET title = ? WHERE video_id = ?", (html.unescape(v["title"]), v["video_id"]))
+        print(f"Re-attributed {len(rows)} comments: {n_cand} candidate mentions.")
+        return len(rows)
 
 
 if __name__ == "__main__":
-    run()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--reattribute", action="store_true", help="recompute attribution for all comments")
+    args = ap.parse_args()
+    if args.reattribute:
+        reattribute_all()
+    else:
+        run()

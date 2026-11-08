@@ -8,6 +8,7 @@ ENV_FILE="$REPO_ROOT/.env"
 ENV_TEMPLATE="$REPO_ROOT/.env.example"
 
 echo "Setting up Nigeria Election Sentiment pipeline on this Azure Linux host..."
+echo "NOTE: the enrichment step runs two transformer models on CPU; use a VM with >= 4 GB RAM (e.g. Standard_B2s), not B1s."
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "ERROR: python3 is required. Install it and run this script again."
@@ -27,7 +28,8 @@ python3 -m venv venv
 # shellcheck disable=SC1091
 source venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r requirements-pipeline.txt
 
 chmod +x run_daily_pipeline.sh azure-create-vm.sh azure-setup.sh
 

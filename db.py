@@ -92,7 +92,9 @@ CREATE TABLE IF NOT EXISTS discovery_state (
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    # 120 s busy timeout: the enrichment scorer and the dashboard may hold the
+    # file briefly while the collector writes, and vice versa.
+    conn = sqlite3.connect(DB_PATH, timeout=120)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

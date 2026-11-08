@@ -7,7 +7,7 @@ LOCATION="southafricanorth"
 ADMIN_USER="azureuser"
 SSH_KEY_PATH="${HOME}/.ssh/id_rsa"
 IMAGE="UbuntuLTS"
-SIZE="Standard_B1s"
+SIZE="Standard_B2s"   # >= 4 GB RAM needed for the transformer enrichment step
 
 if ! command -v az >/dev/null 2>&1; then
   echo "Azure CLI is not installed. Install it first: https://learn.microsoft.com/cli/azure/install-azure-cli"

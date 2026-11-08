@@ -9,12 +9,12 @@ add or change a channel in config.py.
 """
 
 from googleapiclient.discovery import build
-from config import YOUTUBE_API_KEY, CHANNELS
+from config import require_api_key, CHANNELS
 from db import init_db, get_conn, upsert_channel
 
 
 def resolve_all():
-    youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+    youtube = build("youtube", "v3", developerKey=require_api_key())
     init_db()
 
     with get_conn() as conn:
